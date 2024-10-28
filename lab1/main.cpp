@@ -15,6 +15,7 @@ typedef struct elipse {
     int o_x, o_y;
     double alpha, theta;
     int beta;
+    int votes;
 } elipse;
 
 int main(int argc, char *argv[]) {
@@ -23,7 +24,8 @@ int main(int argc, char *argv[]) {
     long fpixel = 1, naxis = 2, exposure;
     long naxes[2];
 
-    int numBetas, relativeVotes, alphaMin, hebras1, hebras2;
+    int numBetas, alphaMin, hebras1, hebras2;
+    double relativeVotes;
     char *input_file;
 
     int opt;
@@ -36,7 +38,7 @@ int main(int argc, char *argv[]) {
                 alphaMin = atoi(optarg);
                 break;
             case 'r':
-                relativeVotes = atoi(optarg);
+                relativeVotes = atof(optarg);
                 break;
             case 'b':
                 numBetas = atoi(optarg);
@@ -62,8 +64,6 @@ int main(int argc, char *argv[]) {
     fits_read_img(fptr, TDOUBLE, fpixel, naxes[0] * naxes[1], NULL, myimage, NULL, &status);
 
     vector<int> borders = vector<int>();
-
-    int variable = 4;
 
     auto start = high_resolution_clock::now();
 #pragma omp parallel num_threads(hebras1)
@@ -91,31 +91,31 @@ int main(int argc, char *argv[]) {
 #pragma omp for
         for (int t : borders) {
             // calculate axis for point t
-            int x_axis_t = t / naxes[0];
-            int y_axis_t = t % naxes[0];
+            int y_axis_t = t / naxes[0];
+            int x_axis_t = t % naxes[0];
             for (int u : borders) {
                 vector<int> votes = vector<int>(numBetas, 0);
 
                 // calculate axis for point u
-                int x_axis_u = u / naxes[0];
-                int y_axis_u = u % naxes[0];
+                int y_axis_u = u / naxes[0];
+                int x_axis_u = u % naxes[0];
 
                 // compute o_x, o_y, alpha, theta
-                int o_x = (x_axis_t + x_axis_u) / 2;
                 int o_y = (y_axis_t + y_axis_u) / 2;
+                int o_x = (x_axis_t + x_axis_u) / 2;
                 double alpha = sqrt(pow(x_axis_u - x_axis_t, 2) + pow(y_axis_u - y_axis_t, 2)) / 2;
                 double theta = atan2(y_axis_u - y_axis_t, x_axis_u - x_axis_t);
 
+                // check if alpha is greater than alphaMin
                 if (alpha < alphaMin) continue;
 
                 for (int k : borders) {
-                    if (k == t && k == u) {
-                        continue;
-                    }
+                    // check if k is t or u
+                    if (k == t || k == u) continue;
 
                     // calculate axis for point u
-                    int x_axis_k = k / naxes[0];
-                    int y_axis_k = k % naxes[0];
+                    int y_axis_k = k / naxes[0];
+                    int x_axis_k = k % naxes[0];
 
                     // calculate distance from center to k
                     double delta = sqrt(pow(y_axis_k - o_y, 2) + pow(x_axis_k - o_x, 2));
@@ -123,22 +123,27 @@ int main(int argc, char *argv[]) {
                     if (delta > alpha) continue;
 
                     // compute beta, gamma
-                    double gamma = sin(theta) * (y_axis_k - o_y) - cos(theta) * (x_axis_k - o_x);
-                    double beta = sqrt((pow(alpha, 2) * pow(delta, 2) - pow(alpha, 2) * pow(gamma, 2)) / (pow(alpha, 2) - pow(gamma, 2)));
+                    double gamma = sin(theta) * (y_axis_k - o_y) + cos(theta) * (x_axis_k - o_x);
+                    double beta = sqrt(
+                        (pow(alpha, 2) * pow(delta, 2) - pow(alpha, 2) * pow(gamma, 2)) /
+                        (pow(alpha, 2) - pow(gamma, 2)));
 
-                    if (isnan(beta) || beta < 0 || beta > (max(naxes[0], naxes[1])) / 2) continue;
+                    // check if beta is valid and if it is less than alpha
+                    if (isnan(beta) || beta < 0 || beta > alpha) continue;
 
                     // discretize beta and add vote
                     int beta_index = beta / ((double)max(naxes[0], naxes[1]) / (2 * numBetas));
-                    votes[beta_index] += 1;
+                    votes[beta_index]++;
                 }
 
 #pragma omp critical
                 {
                     // save elipse if it has the minimum number of votes
                     for (int i = 0; i < numBetas; i++) {
-                        if (votes[i] > relativeVotes) {
-                            elipse newElipse = {o_x, o_y, alpha, theta, i};
+                        // calculate ellipse circumference
+                        int CE = M_PI * (3 * (alpha + i) - sqrt((3 * alpha + i) * (alpha + 3 * i)));
+                        if (votes[i] > CE * .4) {
+                            elipse newElipse = {o_x, o_y, alpha, theta, i, votes[i]};
                             newElipses.insert(newElipses.end(), newElipse);
                         }
                     }
@@ -153,11 +158,10 @@ int main(int argc, char *argv[]) {
     fits_close_file(fptr, &status);
 
     for (elipse e : newElipses) {
-        printf("%d, %d, %f, %f, %d\n", e.o_x, e.o_y, e.alpha, e.theta, e.beta);
+        printf("%d, %d, %f, %d, %f, %d\n", e.o_x, e.o_y, e.alpha, e.beta, e.theta, e.votes);
     }
 
-
     double seconds = (double)duration.count() / 1000000.00;
-    printf("Time taken by function: %f seconds\n", seconds);
+    printf("%f\n", seconds);
     return 0;
 }
