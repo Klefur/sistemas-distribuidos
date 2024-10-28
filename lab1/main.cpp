@@ -86,6 +86,7 @@ int main(int argc, char *argv[]) {
 
     vector<elipse> newElipses = vector<elipse>();
 
+    omp_set_nested(1);
 #pragma omp parallel num_threads(hebras1)
     {
 #pragma omp for
@@ -108,41 +109,44 @@ int main(int argc, char *argv[]) {
 
                 // check if alpha is greater than alphaMin
                 if (alpha < alphaMin) continue;
+#pragma omp parallel num_threads(hebras2)
+                {
+#pragma omp for
+                    for (int k : borders) {
+                        // check if k is t or u
+                        if (k == t || k == u) continue;
 
-                for (int k : borders) {
-                    // check if k is t or u
-                    if (k == t || k == u) continue;
+                        // calculate axis for point u
+                        int y_axis_k = k / naxes[0];
+                        int x_axis_k = k % naxes[0];
 
-                    // calculate axis for point u
-                    int y_axis_k = k / naxes[0];
-                    int x_axis_k = k % naxes[0];
+                        // calculate distance from center to k
+                        double delta = sqrt(pow(y_axis_k - o_y, 2) + pow(x_axis_k - o_x, 2));
 
-                    // calculate distance from center to k
-                    double delta = sqrt(pow(y_axis_k - o_y, 2) + pow(x_axis_k - o_x, 2));
+                        if (delta > alpha) continue;
 
-                    if (delta > alpha) continue;
+                        // compute beta, gamma
+                        double gamma = sin(theta) * (y_axis_k - o_y) + cos(theta) * (x_axis_k - o_x);
+                        double beta = sqrt(
+                            (pow(alpha, 2) * pow(delta, 2) - pow(alpha, 2) * pow(gamma, 2)) /
+                            (pow(alpha, 2) - pow(gamma, 2)));
 
-                    // compute beta, gamma
-                    double gamma = sin(theta) * (y_axis_k - o_y) + cos(theta) * (x_axis_k - o_x);
-                    double beta = sqrt(
-                        (pow(alpha, 2) * pow(delta, 2) - pow(alpha, 2) * pow(gamma, 2)) /
-                        (pow(alpha, 2) - pow(gamma, 2)));
+                        // check if beta is valid and if it is less than alpha
+                        if (isnan(beta) || beta < 0 || beta > alpha) continue;
 
-                    // check if beta is valid and if it is less than alpha
-                    if (isnan(beta) || beta < 0 || beta > alpha) continue;
-
-                    // discretize beta and add vote
-                    int beta_index = beta / ((double)max(naxes[0], naxes[1]) / (2 * numBetas));
-                    votes[beta_index]++;
+                        // discretize beta and add vote
+                        int beta_index = beta / ((double)max(naxes[0], naxes[1]) / (2 * numBetas));
+#pragma omp atomic
+                        votes[beta_index]++;
+                    }
                 }
-
 #pragma omp critical
                 {
                     // save elipse if it has the minimum number of votes
                     for (int i = 0; i < numBetas; i++) {
                         // calculate ellipse circumference
                         int CE = M_PI * (3 * (alpha + i) - sqrt((3 * alpha + i) * (alpha + 3 * i)));
-                        if (votes[i] > CE * .4) {
+                        if (votes[i] > CE * relativeVotes) {
                             elipse newElipse = {o_x, o_y, alpha, theta, i, votes[i]};
                             newElipses.insert(newElipses.end(), newElipse);
                         }
