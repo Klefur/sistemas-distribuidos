@@ -1,7 +1,6 @@
 #include <omp.h>
 #include <unistd.h>
 
-#include <chrono>
 #include <cmath>
 #include <vector>
 
@@ -9,18 +8,19 @@
 #include "stdio.h"
 
 using namespace std;
-using namespace std::chrono;
 
 typedef struct elipse {
     int o_x, o_y;
     double alpha, theta;
     int beta;
-    int votes;
 } elipse;
+
+vector<int> get_borders(double *myimage, long *naxes, int hebras1);
+vector<elipse> get_elipses(double *myimage, long *naxes, int hebras1, int hebras2, int numBetas, double relativeVotes, int alphaMin, vector<int> borders);
 
 int main(int argc, char *argv[]) {
     int status;
-    fitsfile *fptr; /* pointer to the FITS file; defined in fitsio.h */
+    fitsfile *fptr;
     long fpixel = 1, naxis = 2, exposure;
     long naxes[2];
 
@@ -65,7 +65,55 @@ int main(int argc, char *argv[]) {
 
     vector<int> borders = vector<int>();
 
-    auto start = high_resolution_clock::now();
+    // 1 thread
+    double start_1 = omp_get_wtime();
+    borders = get_borders(myimage, naxes, 1);
+    double start_h1 = omp_get_wtime();
+    get_elipses(myimage, naxes, 1, 1, numBetas, relativeVotes, alphaMin, borders);
+    double stop_h1 = omp_get_wtime();
+    double stop_1 = omp_get_wtime();
+
+    double duration_h1 = stop_h1 - start_h1;
+    double duration_1 = stop_1 - start_1;
+
+    // N threads
+    double start_n = omp_get_wtime();
+    borders = get_borders(myimage, naxes, hebras1);
+    double start_hn = omp_get_wtime();
+    vector<elipse> newElipses = get_elipses(myimage, naxes, hebras1, hebras2, numBetas, relativeVotes, alphaMin, borders);
+    double stop_hn = omp_get_wtime();
+    double stop_n = omp_get_wtime();
+
+    double duration_hn = stop_hn - start_hn;
+    double duration_n = stop_n - start_n;
+
+    fits_close_file(fptr, &status);
+
+    for (elipse e : newElipses) {
+        printf("%d, %d, %f, %d, %f\n", e.o_x, e.o_y, e.alpha, e.beta, e.theta);
+    }
+
+    printf("%.2f\n", duration_h1);
+    printf("%.2f\n", duration_hn);
+
+    // porcentaje serial
+    double porcentaje = 25.0 / 200.0;
+    printf("%.2f%%\n", porcentaje * 100);
+
+    double speedup_total = duration_1 / duration_n;
+    printf("%.2f\n", speedup_total);
+
+    printf("%.2f\n", duration_1);
+    printf("%.2f\n", duration_n);
+
+    double speedup_hough = duration_h1 / duration_hn;
+    printf("%.2f\n", speedup_hough);
+
+    return 0;
+}
+
+vector<int> get_borders(double *myimage, long *naxes, int hebras1) {
+    vector<int> borders = vector<int>();
 #pragma omp parallel num_threads(hebras1)
     {
         vector<int> local_borders = vector<int>();
@@ -83,7 +131,10 @@ int main(int argc, char *argv[]) {
             }
         }
     }
+    return borders;
+}
 
+vector<elipse> get_elipses(double *myimage, long *naxes, int hebras1, int hebras2, int numBetas, double relativeVotes, int alphaMin, vector<int> borders) {
     vector<elipse> newElipses = vector<elipse>();
 
     omp_set_nested(1);
@@ -147,7 +198,8 @@ int main(int argc, char *argv[]) {
                         // calculate ellipse circumference
                         int CE = M_PI * (3 * (alpha + i) - sqrt((3 * alpha + i) * (alpha + 3 * i)));
                         if (votes[i] > CE * relativeVotes) {
-                            elipse newElipse = {o_x, o_y, alpha, theta, i, votes[i]};
+                            theta = theta * (180 / M_PI);
+                            elipse newElipse = {o_x, o_y, alpha, theta, i};
                             newElipses.insert(newElipses.end(), newElipse);
                         }
                     }
@@ -155,17 +207,6 @@ int main(int argc, char *argv[]) {
             }
         }
     }
-    // After function call
-    auto stop = high_resolution_clock::now();
-    auto duration = duration_cast<microseconds>(stop - start);
 
-    fits_close_file(fptr, &status);
-
-    for (elipse e : newElipses) {
-        printf("%d, %d, %f, %d, %f, %d\n", e.o_x, e.o_y, e.alpha, e.beta, e.theta, e.votes);
-    }
-
-    double seconds = (double)duration.count() / 1000000.00;
-    printf("%f\n", seconds);
-    return 0;
+    return newElipses;
 }
