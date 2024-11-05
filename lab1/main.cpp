@@ -11,8 +11,7 @@ using namespace std;
 
 typedef struct elipse {
     int o_x, o_y;
-    double alpha, theta;
-    int beta;
+    double alpha, theta, beta;
 } elipse;
 
 vector<int> get_borders(double *myimage, long *naxes, int hebras1);
@@ -62,12 +61,12 @@ int main(int argc, char *argv[]) {
 
     double *myimage = (double *)malloc(naxes[0] * naxes[1] * sizeof(double));
     fits_read_img(fptr, TDOUBLE, fpixel, naxes[0] * naxes[1], NULL, myimage, NULL, &status);
-
     vector<int> borders = vector<int>();
 
-    // 1 thread
+    // Execution with 1 thread
     double start_1 = omp_get_wtime();
     borders = get_borders(myimage, naxes, 1);
+    
     double start_h1 = omp_get_wtime();
     get_elipses(myimage, naxes, 1, 1, numBetas, relativeVotes, alphaMin, borders);
     double stop_h1 = omp_get_wtime();
@@ -76,12 +75,14 @@ int main(int argc, char *argv[]) {
     double duration_h1 = stop_h1 - start_h1;
     double duration_1 = stop_1 - start_1;
 
-    // N threads
+    // Execution N threads level 1 and M threads level 2
     double start_n = omp_get_wtime();
     borders = get_borders(myimage, naxes, hebras1);
+    
     double start_hn = omp_get_wtime();
     vector<elipse> newElipses = get_elipses(myimage, naxes, hebras1, hebras2, numBetas, relativeVotes, alphaMin, borders);
     double stop_hn = omp_get_wtime();
+    
     double stop_n = omp_get_wtime();
 
     double duration_hn = stop_hn - start_hn;
@@ -90,24 +91,28 @@ int main(int argc, char *argv[]) {
     fits_close_file(fptr, &status);
 
     for (elipse e : newElipses) {
-        printf("%d, %d, %f, %d, %f\n", e.o_x, e.o_y, e.alpha, e.beta, e.theta);
+        printf("%d\t %d\t %.2f\t %.2f\t %.2f\n", e.o_x, e.o_y, e.alpha, e.beta, e.theta);
     }
 
+    // prints durations for serial and parallel code for hough algorithm
     printf("%.2f\n", duration_h1);
     printf("%.2f\n", duration_hn);
 
-    // porcentaje serial
-    double porcentaje = 25.0 / 200.0;
+    // calculate percentage of the parallel code that executes in serial
+    double porcentaje = (duration_1 - duration_n) / duration_1;
     printf("%.2f%%\n", porcentaje * 100);
 
-    double speedup_total = duration_1 / duration_n;
-    printf("%.2f\n", speedup_total);
+    // calculate speedup for hough algorithm
+    double speedup_hough = duration_h1 / duration_hn;
+    printf("%.2f\n", speedup_hough);
 
+    // prints durations for serial and parallel for the whole program
     printf("%.2f\n", duration_1);
     printf("%.2f\n", duration_n);
 
-    double speedup_hough = duration_h1 / duration_hn;
-    printf("%.2f\n", speedup_hough);
+    // calculate speedup for the whole program
+    double speedup_total = (duration_1) / (duration_n);
+    printf("%.2f\n", speedup_total);
 
     return 0;
 }
@@ -198,8 +203,9 @@ vector<elipse> get_elipses(double *myimage, long *naxes, int hebras1, int hebras
                         // calculate ellipse circumference
                         int CE = M_PI * (3 * (alpha + i) - sqrt((3 * alpha + i) * (alpha + 3 * i)));
                         if (votes[i] > CE * relativeVotes) {
+                            double beta = i * ((double)max(naxes[0], naxes[1]) / (2 * numBetas));
                             theta = theta * (180 / M_PI);
-                            elipse newElipse = {o_x, o_y, alpha, theta, i};
+                            elipse newElipse = {o_x, o_y, alpha, theta, beta};
                             newElipses.insert(newElipses.end(), newElipse);
                         }
                     }
